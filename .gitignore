@@ -1,1 +1,46 @@
-venv/*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data (large files — not committed)
+data/raw/
+data/processed/
+data/splits/
+data/boxingvi/
+
+# Model checkpoints (large files)
+checkpoints/*.pt
+checkpoints/*.pkl
+
+# Training results (regenerable)
+results/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/*.nbconvert.*
+
+# Misc
+*.log
+*.tmp

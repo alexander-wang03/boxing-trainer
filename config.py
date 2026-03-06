@@ -44,19 +44,40 @@ DEFENSE_CLASSES = [
 NUM_DEFENSE_CLASSES = len(DEFENSE_CLASSES)  # 5
 
 # ──────────────────────────────────────────────
-# MediaPipe / Keypoints
+# Keypoint Configuration
 # ──────────────────────────────────────────────
-NUM_KEYPOINTS = 33
-KEYPOINT_DIMS = 3  # x, y, z
-FEATURES_PER_FRAME = NUM_KEYPOINTS * KEYPOINT_DIMS  # 99
 
-# Head keypoint indices (MediaPipe Pose)
-HEAD_KEYPOINT_INDICES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # nose, eyes, ears, mouth
+# MediaPipe Pose (used for real-time inference + custom data)
+MEDIAPIPE_NUM_KEYPOINTS = 33
+MEDIAPIPE_KEYPOINT_DIMS = 3  # x, y, z
+MEDIAPIPE_FEATURES_PER_FRAME = MEDIAPIPE_NUM_KEYPOINTS * MEDIAPIPE_KEYPOINT_DIMS  # 99
+
+# AlphaPose / COCO-17 (used by BoxingVI dataset)
+COCO_NUM_KEYPOINTS = 17
+COCO_KEYPOINT_DIMS = 2  # x, y (normalized)
+COCO_FEATURES_PER_FRAME = COCO_NUM_KEYPOINTS * COCO_KEYPOINT_DIMS  # 34
+
+# Active keypoint config — set based on which dataset is being used.
+# Change these when switching between BoxingVI (COCO) and custom (MediaPipe).
+NUM_KEYPOINTS = COCO_NUM_KEYPOINTS
+KEYPOINT_DIMS = COCO_KEYPOINT_DIMS
+FEATURES_PER_FRAME = COCO_FEATURES_PER_FRAME  # 34
+
+# Head keypoint indices
+HEAD_KEYPOINT_INDICES_MEDIAPIPE = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # nose, eyes, ears, mouth
+HEAD_KEYPOINT_INDICES_COCO = [0, 1, 2, 3, 4]  # nose, left eye, right eye, left ear, right ear
+HEAD_KEYPOINT_INDICES = HEAD_KEYPOINT_INDICES_COCO
+
+# ──────────────────────────────────────────────
+# BoxingVI Dataset
+# ──────────────────────────────────────────────
+BOXINGVI_DIR = DATA_DIR / "boxingvi"
+BOXINGVI_SEQUENCE_LENGTH = 25  # BoxingVI clips are 25 frames (zero-padded)
 
 # ──────────────────────────────────────────────
 # Sequence / Windowing
 # ──────────────────────────────────────────────
-SEQUENCE_LENGTH = 30  # frames (1 second at 30fps)
+SEQUENCE_LENGTH = 25  # frames (matches BoxingVI; change to 30 for custom 30fps data)
 FRAME_RATE = 30
 
 # ──────────────────────────────────────────────

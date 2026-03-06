@@ -1,13 +1,15 @@
 """
 Model A: Bidirectional LSTM Punch Classifier.
 
-Input:  (batch, 30, 99) — 30-frame sequences of 33 keypoints × 3 coords
+Input:  (batch, seq_len, features_per_frame)
+        BoxingVI: (batch, 25, 34) — 25 frames, 17 COCO keypoints x 2 coords
+        Custom:   (batch, 30, 99) — 30 frames, 33 MediaPipe keypoints x 3 coords
 Output: (batch, 9) — logits for 8 punch types + neutral
 
 Architecture:
-    1. Per-frame FC: 99 → 128, ReLU, Dropout(0.2)
+    1. Per-frame FC: features -> 128, ReLU, Dropout(0.2)
     2. 2-layer Bidirectional LSTM, hidden_size=256
-    3. Classifier: 512 → 128 → 9
+    3. Classifier: 512 -> 128 -> 9
 """
 
 import torch
@@ -56,7 +58,7 @@ class PunchClassifier(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: (batch, seq_len, 99)
+            x: (batch, seq_len, features_per_frame)
 
         Returns:
             logits: (batch, num_classes)

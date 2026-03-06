@@ -1,55 +1,72 @@
-# Session Handoff — Interactive Shadow Boxing Trainer
+# Session Handoff -- Interactive Shadow Boxing Trainer
 
 ## Project Overview
-Webcam-only interactive shadow boxing trainer using MediaPipe pose estimation + dual LSTM classifiers (punch + defense) with a Pygame-based real-time UI.
+Webcam-only interactive shadow boxing trainer using pose estimation + dual LSTM classifiers (punch + defense) with a Pygame-based real-time UI.
 
-## Current Status: Full Scaffold Complete
+## Current Status: BoxingVI Dataset Integrated
 
-All 16 source files implemented. Project is ready for data collection and training.
+Full scaffold complete (16 source files). BoxingVI punch dataset integrated and producing train/val/test splits. Defense model data still requires custom recording.
 
 ### Completed Files
-- [x] `config.py` — global constants, paths, hyperparameters, class labels
-- [x] `requirements.txt` — all dependencies (PyTorch, MediaPipe, Pygame, OpenCV, etc.)
-- [x] `src/data/collect.py` — webcam recording tool with keyboard controls (SPACE=record, S=save, Q=quit)
-- [x] `src/data/extract.py` — MediaPipe keypoint extraction + shoulder-width normalization → .npy files
-- [x] `src/data/annotate.py` — interactive annotation tool (play/pause, frame step, mark start/end → CSV)
-- [x] `src/data/preprocess.py` — sliding windows, augmentation (flip, speed, frame drop), train/val/test split
-- [x] `src/data/dataset.py` — PyTorch `BoxingDataset` + `get_punch_loaders()` / `get_defense_loaders()`
-- [x] `src/models/punch_classifier.py` — BiLSTM: FC(99→128) → BiLSTM(256h, 2-layer) → FC(512→128→9), ~800K params
-- [x] `src/models/defense_classifier.py` — LSTM: LSTM(66→128h, 2-layer) → FC(128→64→5), ~200K params
-- [x] `src/models/baselines.py` — Rule-based + Frame-SVM + Feedforward MLP baselines
-- [x] `src/training/train.py` — training loop with early stopping, LR scheduling, checkpointing
-- [x] `src/training/evaluate.py` — accuracy, F1, confusion matrices, training curves, model comparison
-- [x] `src/game/inference.py` — real-time pipeline: rolling buffer → normalize → dual model inference → temporal smoothing
-- [x] `src/game/game_logic.py` — sparring partner AI, cue generation, combo scoring, difficulty levels
-- [x] `src/game/renderer.py` — Pygame renderer: webcam feed, skeleton overlay, HUD, cues, flash effects, menus
-- [x] `src/game/app.py` — main game loop tying together webcam + inference + game logic + rendering
+- [x] `config.py` -- global constants, paths, hyperparameters, class labels (updated for COCO-17 keypoints)
+- [x] `requirements.txt` -- all dependencies
+- [x] `src/data/collect.py` -- webcam recording tool
+- [x] `src/data/extract.py` -- MediaPipe keypoint extraction
+- [x] `src/data/annotate.py` -- interactive annotation tool
+- [x] `src/data/preprocess.py` -- normalization + augmentation (for custom data)
+- [x] `src/data/dataset.py` -- PyTorch `BoxingDataset` + DataLoader factories
+- [x] `src/data/load_boxingvi.py` -- **NEW** BoxingVI dataset loader + split builder
+- [x] `src/models/punch_classifier.py` -- BiLSTM (updated: accepts configurable input_dim)
+- [x] `src/models/defense_classifier.py` -- LSTM defense classifier
+- [x] `src/models/baselines.py` -- Rule-based + Frame-SVM + Feedforward MLP
+- [x] `src/training/train.py` -- training loop with early stopping, LR scheduling
+- [x] `src/training/evaluate.py` -- evaluation + metrics
+- [x] `src/game/inference.py` -- real-time prediction pipeline
+- [x] `src/game/game_logic.py` -- sparring partner AI + scoring
+- [x] `src/game/renderer.py` -- Pygame renderer
+- [x] `src/game/app.py` -- main game loop
 
-### Next Steps (User Action Required)
-1. **Install dependencies:** `pip install -r requirements.txt`
-2. **Collect data:** `python -m src.data.collect --action jab_left` (repeat for each action type)
-3. **Annotate clips:** `python -m src.data.annotate`
-4. **Extract keypoints:** `python -m src.data.extract`
-5. **Preprocess & split:** `python -m src.data.preprocess`
-6. **Train models:** `python -m src.training.train --model punch` and `--model defense`
-7. **Evaluate:** `python -m src.training.evaluate --compare`
-8. **Run the game:** `python -m src.game.app`
+### BoxingVI Integration Details
+- **Source:** https://github.com/Bikudebug/BoxingVI (Google Drive download)
+- **Data placed at:** `data/boxingvi/{Annotation_files, Skeleton_data, RGB_videos}`
+- **Format:** AlphaPose COCO-17 keypoints, 2D (x, y normalized), 25-frame clips
+- **Classes mapped:** Jab->jab_left, Cross->cross_right, Lead Hook->hook_left, Rear Hook->hook_right, Lead Uppercut->uppercut_left, Rear Uppercut->uppercut_right
+- **Split:** V1-V7 train (14,853 samples w/ augmentation), V8-V10 val+test (250+250)
+- **Augmentation:** Horizontal flip (with L/R label swap) + speed variation (0.8-1.2x)
+- **Output:** `data/splits/punch_{train,val,test}.npz` with shape `(N, 25, 34)`
+
+### Config Changes (BoxingVI mode)
+- `FEATURES_PER_FRAME` = 34 (was 99 for MediaPipe)
+- `SEQUENCE_LENGTH` = 25 (was 30)
+- `NUM_KEYPOINTS` = 17 (was 33)
+- `KEYPOINT_DIMS` = 2 (was 3)
+- Both MediaPipe and COCO constants preserved in config for future switching
+
+### Next Steps
+1. `pip install -r requirements.txt` (in venv)
+2. `python -m src.data.load_boxingvi` -- already run, splits exist
+3. `python -m src.training.train --model punch` -- train punch classifier on BoxingVI
+4. `python -m src.training.evaluate --model punch` -- evaluate
+5. Record custom defensive clips (slip, duck, weave, block) -- ~400 clips needed
+6. Run real-time game: `python -m src.game.app`
 
 ### Issues & Fixes
-_(none yet)_
+1. **Unicode arrow in print statements (Windows cp1252):** `load_boxingvi.py` used Unicode arrows that failed on Windows console. Fixed by replacing with ASCII `->`.
+2. **V6 different format:** V6 skeleton is raw per-frame `(46497, 1, 17, 3)` instead of pre-clipped `(N, 25, 17, 2)`. Handled with special-case `clip_v6_sequences()` function.
+3. **Inconsistent annotation Excel layouts:** Each V1-V10 xlsx has different column arrangements and header rows. Handled by extracting first 3 non-NaN values per row (start, end, class) regardless of column structure.
+4. **Class name case inconsistency:** BoxingVI has both "Lead Hook" and "Lead hook". Handled by lowercasing all class names before mapping.
 
 ### Architecture Decisions
-- **Framework:** PyTorch for models, MediaPipe for pose, Pygame for UI
-- **Two-model approach:** Punch classifier uses full-body keypoints (99 features/frame); Defense classifier uses head keypoints + velocity (66 features/frame)
-- **Sequence length:** 30 frames (1 sec at 30fps) for both models
-- **Normalization:** Shoulder-width normalization for translation/scale invariance
-- **Augmentation:** Horizontal flip (with L/R label swap), speed variation (0.8–1.2x), random frame drop
+- **Framework:** PyTorch for models, MediaPipe for real-time pose, Pygame for UI
+- **Two-model approach:** Punch classifier uses full-body keypoints; Defense uses head keypoints + velocity
+- **BoxingVI for punch data:** 6,915 clips (14,853 with augmentation) from public dataset, eliminating need for custom punch recording
+- **Custom recording only for defense:** ~400 clips for slip/duck/weave/block still needed
+- **Augmentation:** Horizontal flip (with L/R label swap), speed variation (0.8-1.2x)
 - **Temporal smoothing:** Majority vote over last 5 predictions for stable real-time output
-- **Game difficulty:** 3 levels controlling cue frequency and reaction window
 
-### File Sizes (Approximate Parameters)
+### Model Input Shapes (BoxingVI mode)
 | Model | Params | Input |
 |-------|--------|-------|
-| Punch BiLSTM | ~800K | (30, 99) |
-| Defense LSTM | ~200K | (30, 66) |
-| MLP Baseline | ~1.6M | (2970,) flattened |
+| Punch BiLSTM | ~500K | (25, 34) |
+| Defense LSTM | ~200K | (25, head_features) |
+| MLP Baseline | ~450K | (850,) flattened |
