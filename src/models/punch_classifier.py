@@ -1,0 +1,91 @@
+"""
+Model A: Bidirectional LSTM Punch Classifier.
+
+Input:  (batch, 30, 99) — 30-frame sequences of 33 keypoints × 3 coords
+Output: (batch, 9) — logits for 8 punch types + neutral
+
+Architecture:
+    1. Per-frame FC: 99 → 128, ReLU, Dropout(0.2)
+    2. 2-layer Bidirectional LSTM, hidden_size=256
+    3. Classifier: 512 → 128 → 9
+"""
+
+import torch
+import torch.nn as nn
+
+import config
+
+
+class PunchClassifier(nn.Module):
+    def __init__(
+        self,
+        input_dim: int = config.FEATURES_PER_FRAME,
+        fc_dim: int = config.PUNCH_FC_DIM,
+        lstm_hidden: int = config.PUNCH_LSTM_HIDDEN,
+        lstm_layers: int = config.PUNCH_LSTM_LAYERS,
+        num_classes: int = config.NUM_PUNCH_CLASSES,
+        dropout: float = config.PUNCH_DROPOUT,
+    ):
+        super().__init__()
+
+        # Per-frame feature projection
+        self.frame_fc = nn.Sequential(
+            nn.Linear(input_dim, fc_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+
+        # Bidirectional LSTM
+        self.lstm = nn.LSTM(
+            input_size=fc_dim,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=dropout if lstm_layers > 1 else 0.0,
+        )
+
+        # Classifier head (bidirectional → hidden * 2)
+        self.classifier = nn.Sequential(
+            nn.Linear(lstm_hidden * 2, fc_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fc_dim, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (batch, seq_len, 99)
+
+        Returns:
+            logits: (batch, num_classes)
+        """
+        # Per-frame projection
+        batch, seq_len, _ = x.shape
+        x = self.frame_fc(x)  # (batch, seq_len, fc_dim)
+
+        # LSTM
+        lstm_out, _ = self.lstm(x)  # (batch, seq_len, lstm_hidden * 2)
+
+        # Use final time step output
+        final_output = lstm_out[:, -1, :]  # (batch, lstm_hidden * 2)
+
+        # Classify
+        logits = self.classifier(final_output)  # (batch, num_classes)
+        return logits
+
+
+def count_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+if __name__ == "__main__":
+    model = PunchClassifier()
+    print(f"PunchClassifier: {count_parameters(model):,} parameters")
+
+    # Test forward pass
+    dummy = torch.randn(4, config.SEQUENCE_LENGTH, config.FEATURES_PER_FRAME)
+    out = model(dummy)
+    print(f"Input:  {dummy.shape}")
+    print(f"Output: {out.shape}")
