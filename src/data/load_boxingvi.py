@@ -169,6 +169,76 @@ def clip_v6_sequences(raw_data: np.ndarray, annotations: list[dict]) -> np.ndarr
     return np.array(clips, dtype=np.float32)
 
 
+def normalize_to_body(window: np.ndarray) -> np.ndarray:
+    """
+    Normalize COCO-17 keypoints to be body-relative.
+
+    Centers on hip midpoint (kp 11, 12) and scales by shoulder width (kp 5, 6).
+    Uses only non-zero (non-padded) frames for computing normalization parameters.
+    Zero-padded frames remain zero after normalization.
+
+    Args:
+        window: Shape (seq_len, 17, 2).
+
+    Returns:
+        Normalized array of same shape.
+    """
+    # Detect valid (non-padded) frames — zero-padded frames have all keypoints at (0, 0)
+    frame_norms = np.linalg.norm(window.reshape(window.shape[0], -1), axis=1)
+    valid_mask = frame_norms > 1e-6
+
+    if not valid_mask.any():
+        return window
+
+    valid = window[valid_mask]  # (n_valid, 17, 2)
+
+    # Compute mean hip center from valid frames only
+    hip_center = ((valid[:, 11, :] + valid[:, 12, :]) / 2.0).mean(axis=0)  # (2,)
+
+    # Compute mean shoulder width from valid frames only
+    shoulder_width = np.linalg.norm(valid[:, 5, :] - valid[:, 6, :], axis=1)
+    scale = shoulder_width.mean()
+
+    if scale < 1e-6:
+        return window
+
+    normalized = window.copy()
+    # Apply normalization only to valid frames; padded frames stay as zeros
+    normalized[valid_mask] = (valid - hip_center[np.newaxis, np.newaxis, :]) / scale
+    return normalized
+
+
+def add_velocity_features(clip: np.ndarray) -> np.ndarray:
+    """
+    Append frame-to-frame velocity to position features.
+
+    Args:
+        clip: Shape (seq_len, 17, 2) — body-normalized positions.
+
+    Returns:
+        Shape (seq_len, 17, 4) — positions + velocities concatenated along last axis.
+        Velocity is zeroed at padded frames and at the frame after the last valid frame.
+    """
+    seq_len = clip.shape[0]
+
+    # Detect valid frames
+    frame_norms = np.linalg.norm(clip.reshape(seq_len, -1), axis=1)
+    valid_mask = frame_norms > 1e-6
+
+    # Compute velocity: diff of consecutive frames, prepend zero for frame 0
+    vel = np.zeros_like(clip)  # (seq_len, 17, 2)
+    vel[1:] = clip[1:] - clip[:-1]
+
+    # Zero out velocity on padded frames and at the transition boundary
+    for t in range(seq_len):
+        if not valid_mask[t]:
+            vel[t] = 0.0
+        elif t > 0 and not valid_mask[t - 1]:
+            vel[t] = 0.0  # first valid frame after padding has no valid predecessor
+
+    return np.concatenate([clip, vel], axis=-1)  # (seq_len, 17, 4)
+
+
 def augment_horizontal_flip_coco(window: np.ndarray) -> np.ndarray:
     """
     Mirror COCO-17 keypoints horizontally (flip x-coordinates + swap L/R pairs).
@@ -180,7 +250,7 @@ def augment_horizontal_flip_coco(window: np.ndarray) -> np.ndarray:
         Flipped array of same shape.
     """
     flipped = window.copy()
-    flipped[:, :, 0] = 1.0 - flipped[:, :, 0]  # BoxingVI x is in [0, 1]
+    flipped[:, :, 0] = -flipped[:, :, 0]  # body-relative: negate x to mirror
 
     # COCO L/R swap pairs
     swap_pairs = [
@@ -279,6 +349,7 @@ def load_boxingvi_dataset(augment: bool = True, verbose: bool = True):
                 break
 
             clip = clips[idx]  # (25, 17, 2)
+            clip = normalize_to_body(clip)
             mapped_label = BOXINGVI_CLASS_MAP[ann["class_name"]]
             label_idx = config.PUNCH_CLASSES.index(mapped_label)
 
@@ -288,7 +359,7 @@ def load_boxingvi_dataset(augment: bool = True, verbose: bool = True):
             labels_list.append(label_idx)
 
             if augment and split == "train":
-                # Horizontal flip
+                # Horizontal flip (clip is already normalized, flip after)
                 flipped_clip = augment_horizontal_flip_coco(clip)
                 flipped_label = get_flipped_label(mapped_label)
                 if flipped_label in config.PUNCH_CLASSES:

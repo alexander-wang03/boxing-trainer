@@ -9,14 +9,24 @@ Usage:
 
 import argparse
 import json
+import random
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
+
+
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 import config
 from src.data.dataset import get_punch_loaders, get_defense_loaders
@@ -111,6 +121,7 @@ def train(model_name: str, num_epochs: int = config.NUM_EPOCHS,
     """
     Full training pipeline with early stopping and LR scheduling.
     """
+    set_seed(42)
     device = get_device()
     print(f"Device: {device}")
 
@@ -124,12 +135,11 @@ def train(model_name: str, num_epochs: int = config.NUM_EPOCHS,
 
     # Loss, optimizer, scheduler
     criterion = nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters(), lr=lr)
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = ReduceLROnPlateau(
         optimizer, mode="min",
         patience=config.LR_SCHEDULER_PATIENCE,
         factor=config.LR_SCHEDULER_FACTOR,
-        verbose=True,
     )
 
     # Training state

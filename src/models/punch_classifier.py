@@ -14,6 +14,7 @@ Architecture:
 
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import config
 
@@ -64,14 +65,23 @@ class PunchClassifier(nn.Module):
             logits: (batch, num_classes)
         """
         # Per-frame projection
-        batch, seq_len, _ = x.shape
+        batch, _, _ = x.shape
+
+        # Find valid (non-padded) frame counts per sequence
+        valid_mask = (x.abs().sum(dim=-1) > 1e-6)  # (batch, seq_len)
+        seq_lengths = valid_mask.long().sum(dim=1).clamp(min=1)  # (batch,)
+
         x = self.frame_fc(x)  # (batch, seq_len, fc_dim)
 
-        # LSTM
-        lstm_out, _ = self.lstm(x)  # (batch, seq_len, lstm_hidden * 2)
+        # Pack to skip padded frames — fixes BiLSTM backward direction
+        packed = pack_padded_sequence(x, seq_lengths.cpu(), batch_first=True, enforce_sorted=False)
+        packed_out, _ = self.lstm(packed)
+        lstm_out, _ = pad_packed_sequence(packed_out, batch_first=True)  # (batch, max_len, hidden*2)
 
-        # Use final time step output
-        final_output = lstm_out[:, -1, :]  # (batch, lstm_hidden * 2)
+        # Gather output at last valid frame for each sequence
+        idx = (seq_lengths - 1).clamp(min=0).view(batch, 1, 1)
+        idx = idx.expand(batch, 1, lstm_out.size(2))
+        final_output = lstm_out.gather(1, idx).squeeze(1)  # (batch, lstm_hidden * 2)
 
         # Classify
         logits = self.classifier(final_output)  # (batch, num_classes)

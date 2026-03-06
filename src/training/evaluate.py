@@ -167,8 +167,11 @@ def evaluate_model(model_name: str):
     print(f"  F1 (macro):  {f1_macro:.4f}")
     print(f"  F1 (weight): {f1_weighted:.4f}")
 
-    # Classification report
-    report = classification_report(y_true, y_pred, target_names=class_names)
+    # Classification report — only include classes present in the test set
+    present_labels = sorted(set(y_true.tolist()) | set(y_pred.tolist()))
+    present_names = [class_names[i] for i in present_labels]
+    report = classification_report(y_true, y_pred, labels=present_labels,
+                                   target_names=present_names, zero_division=0)
     print(f"\n{report}")
 
     # Save report
