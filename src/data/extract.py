@@ -5,16 +5,19 @@ Usage:
     python -m src.data.extract
     python -m src.data.extract --input data/raw/jab_left_20260301.mp4
 
-Extracts 33 keypoints × 3 coordinates per frame, normalizes to shoulder width,
+Extracts 33 keypoints x 3 coordinates per frame, normalizes to shoulder width,
 and saves as .npy arrays in data/processed/.
 """
 
 import argparse
+import urllib.request
 from pathlib import Path
 
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python as mp_tasks_python
+from mediapipe.tasks.python import vision as mp_tasks_vision
 from tqdm import tqdm
 
 import config
@@ -24,20 +27,34 @@ import config
 LEFT_SHOULDER_IDX = 11
 RIGHT_SHOULDER_IDX = 12
 
+# Pose landmarker model
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+)
+_MODEL_PATH = config.PROJECT_ROOT / "pose_landmarker_full.task"
 
-def extract_keypoints_from_frame(results) -> np.ndarray | None:
+
+def ensure_model() -> Path:
+    """Download pose landmarker model file if not already present."""
+    if not _MODEL_PATH.exists():
+        print(f"Downloading pose landmarker model to {_MODEL_PATH} ...")
+        urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+        print("Download complete.")
+    return _MODEL_PATH
+
+
+def extract_keypoints_from_result(mp_result) -> np.ndarray | None:
     """
-    Extract 33 keypoints (x, y, z) from a MediaPipe Pose result.
+    Extract 33 keypoints (x, y, z) from a PoseLandmarker result.
 
     Returns:
         Array of shape (33, 3) or None if no pose detected.
     """
-    if results.pose_landmarks is None:
+    if not mp_result.pose_landmarks:
         return None
-
-    landmarks = results.pose_landmarks.landmark
-    keypoints = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
-    return keypoints
+    landmarks = mp_result.pose_landmarks[0]
+    return np.array([[lm.x, lm.y, lm.z] for lm in landmarks], dtype=np.float32)
 
 
 def normalize_keypoints(keypoints: np.ndarray) -> np.ndarray:
@@ -82,45 +99,52 @@ def extract_from_video(video_path: Path, normalize: bool = True) -> np.ndarray |
     Returns:
         Array of shape (num_frames, 33, 3) or None if extraction fails.
     """
+    model_path = ensure_model()
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"Error: Cannot open video {video_path}")
         return None
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+    base_options = mp_tasks_python.BaseOptions(model_asset_path=str(model_path))
+    options = mp_tasks_vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_tasks_vision.RunningMode.VIDEO,
     )
 
     all_keypoints = []
     frames_with_no_pose = 0
 
-    for _ in range(total_frames):
-        ret, frame = cap.read()
-        if not ret:
-            break
+    with mp_tasks_vision.PoseLandmarker.create_from_options(options) as landmarker:
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(rgb_frame)
-        kp = extract_keypoints_from_frame(results)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            timestamp_ms = int(frame_idx * 1000 / fps)
+            result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
-        if kp is not None:
-            all_keypoints.append(kp)
-        else:
-            frames_with_no_pose += 1
-            # Fill with previous frame's keypoints or zeros
-            if all_keypoints:
-                all_keypoints.append(all_keypoints[-1].copy())
+            kp = extract_keypoints_from_result(result)
+            if kp is not None:
+                all_keypoints.append(kp)
             else:
-                all_keypoints.append(np.zeros((config.NUM_KEYPOINTS, config.KEYPOINT_DIMS)))
+                frames_with_no_pose += 1
+                # Fill with previous frame's keypoints or zeros
+                if all_keypoints:
+                    all_keypoints.append(all_keypoints[-1].copy())
+                else:
+                    all_keypoints.append(
+                        np.zeros((config.NUM_KEYPOINTS, config.KEYPOINT_DIMS), dtype=np.float32)
+                    )
+
+            frame_idx += 1
 
     cap.release()
-    pose.close()
 
     if not all_keypoints:
         print(f"Warning: No keypoints extracted from {video_path}")
@@ -169,7 +193,7 @@ def process_all_videos(input_dir: Path = config.RAW_DIR,
 
         if keypoints is not None:
             np.save(output_path, keypoints)
-            print(f"  {video_path.name} → {output_path.name} "
+            print(f"  {video_path.name} -> {output_path.name} "
                   f"(shape: {keypoints.shape})")
 
     print("Done.")

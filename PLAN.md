@@ -1,7 +1,7 @@
 # Implementation Plan: Interactive Shadow Boxing Trainer
 
 ## Tech Stack
-- **Python 3.10+**, **PyTorch** (models/training), **MediaPipe** (pose estimation)
+- **Python 3.10+**, **PyTorch** (models/training), **MediaPipe 0.10+** (pose estimation, Tasks API)
 - **Pygame** (real-time UI/game window), **OpenCV** (webcam capture)
 - **NumPy**, **Pandas** (data processing), **scikit-learn** (baselines, metrics)
 
@@ -14,12 +14,13 @@ boxing-trainer/
 ├── requirements.txt
 ├── README.md
 ├── config.py                    # Global constants (paths, hyperparams, class labels)
+├── pose_landmarker_full.task    # MediaPipe model file (auto-downloaded, ~25MB, do not delete)
 │
 ├── data/
-│   ├── raw/                     # Raw recorded video clips (not committed)
-│   ├── processed/               # Extracted keypoint sequences (.npy files)
+│   ├── raw/                     # Raw recorded video clips (1,215 .mp4 files)
+│   ├── processed/               # Extracted keypoint sequences (.npy files, shape: (N_frames, 33, 3))
 │   ├── annotations/             # CSV annotation files (frame ranges, labels)
-│   └── splits/                  # train/val/test split CSVs
+│   └── splits/                  # train/val/test .npz splits
 │
 ├── src/
 │   ├── data/
@@ -42,7 +43,7 @@ boxing-trainer/
 │       ├── app.py               # Main Pygame application loop
 │       ├── renderer.py          # Drawing: webcam feed, overlays, HUD, cues
 │       ├── game_logic.py        # Sparring partner AI, cue generation, scoring
-│       └── inference.py         # Real-time pose → model prediction pipeline
+│       └── inference.py         # Real-time pose -> model prediction pipeline
 │
 ├── checkpoints/                 # Saved model weights (.pt files)
 ├── notebooks/                   # Jupyter notebooks for exploration/visualization
@@ -60,7 +61,7 @@ boxing-trainer/
 - CV2 preview window with game-style HUD (GET READY/GO!/REST/NEXT CLASS phases)
 - Manual mode (keyboard controls) + automated mode (`--auto` flag)
 - Each clip saved as individual video file in `data/raw/` with timestamped filenames
-- **Data collection complete.** Clips recorded for all 12 action classes (8 punches + 4 defense)
+- **Data collection complete.** 1,215 clips recorded for all 12 action classes (8 punches + 4 defense)
 
 ## Phase 2: Annotation & Keypoint Extraction
 
@@ -68,11 +69,13 @@ boxing-trainer/
 - Playback recorded clips, mark start/end frame of each action
 - Save annotations to CSV: `filename, action_type, hand, start_frame, end_frame`
 
-### `src/data/extract.py`
-- Run MediaPipe Pose on each video frame
+### `src/data/extract.py` -- COMPLETE (updated for MediaPipe 0.10+ Tasks API)
+- Uses `mp.tasks.vision.PoseLandmarker` with `RunningMode.VIDEO`
+- Requires `pose_landmarker_full.task` model file in project root (auto-downloaded)
 - Extract 33 keypoints × 3 coordinates (x, y, z) per frame
 - Normalize keypoints to shoulder width (translation + scale invariant)
 - Save as `.npy` arrays in `data/processed/`
+- **Keypoint extraction currently running** on all 1,215 raw clips
 
 ## Phase 3: Data Preprocessing & PyTorch Dataset (`src/data/preprocess.py`, `src/data/dataset.py`)
 
@@ -93,7 +96,7 @@ boxing-trainer/
 
 ## Phase 4: Baseline Models (`src/models/baselines.py`)
 
-> **Format consistency note:** all three baselines must use the same keypoint format and feature dimensionality as the LSTM they are benchmarked against. If training on custom MediaPipe data (33 kp × 3D = 99 features), baselines must also consume 99-feature sequences. Rule-based and SVM baselines contain hardcoded MediaPipe joint indices and will not work correctly with other formats (e.g. AlphaPose COCO-17).
+> **Format consistency note:** all three baselines must use the same keypoint format and feature dimensionality as the LSTM they are benchmarked against. Training on custom MediaPipe data (33 kp × 3D = 99 features). Rule-based and SVM baselines contain hardcoded MediaPipe joint indices and will not work correctly with other formats (e.g. AlphaPose COCO-17).
 
 ### Baseline 1: Rule-Based
 - Hand-coded geometric rules on keypoint positions (MediaPipe indices):
@@ -108,25 +111,25 @@ boxing-trainer/
 - Train RBF-kernel SVM via scikit-learn
 
 ### Baseline 3: Feedforward MLP
-- Flatten 30-frame sequence → 2970D input (30 × 99 for MediaPipe)
-- Architecture: 2970 → 512 → 256 → 9 (punch) or → 5 (defense)
+- Flatten 30-frame sequence -> 2970D input (30 × 99 for MediaPipe)
+- Architecture: 2970 -> 512 -> 256 -> 9 (punch) or -> 5 (defense)
 - ReLU activations, dropout
 
 ## Phase 5: LSTM Models
 
 ### Model A: Punch Classifier (`src/models/punch_classifier.py`)
 - Input: [batch, 30, 99] (30 frames × 33 keypoints × 3 coords)
-- Per-frame FC layer: 99 → 64, ReLU, Dropout(0.4)
+- Per-frame FC layer: 99 -> 64, ReLU, Dropout(0.4)
 - 2-layer Bidirectional LSTM: input_size=64, hidden_size=128
-- Classifier head: 256 → 64 → 9 (8 punch types + neutral)
+- Classifier head: 256 -> 64 -> 9 (8 punch types + neutral)
 - ~600K parameters
 - **Critical implementation note:** use `pack_padded_sequence` / `pad_packed_sequence` to handle variable-length sequences (zero-padded clips). Reading `lstm_out[:, -1, :]` on padded sequences causes the backward LSTM pass to consume zeros, collapsing all outputs to near-identical values and stalling accuracy at chance level. Gather the output at the last *valid* frame index instead.
 
 ### Model B: Defense Classifier (`src/models/defense_classifier.py`)
 - Input: [batch, 30, head_features] (head keypoints + optional velocity features)
-- Head feature extraction: nose, ears, eyes positions (MediaPipe subset)
+- Head feature extraction: nose, ears, eyes positions (MediaPipe indices 0-10)
 - 2-layer LSTM: input_size=head_features, hidden_size=128
-- Classifier head: 128 → 64 → 5 (slip, duck, weave, block, neutral)
+- Classifier head: 128 -> 64 -> 5 (slip, duck, weave, block, neutral)
 - ~200K parameters
 
 ### Training (`src/training/train.py`)
@@ -143,19 +146,19 @@ boxing-trainer/
 - Confusion matrix visualization (saved to `results/`)
 - Compare all models (baselines vs LSTMs) in summary table
 
-## Phase 6: Real-Time Inference Pipeline (`src/game/inference.py`)
+## Phase 6: Real-Time Inference Pipeline (`src/game/inference.py`) -- COMPLETE
 
-> **Train/inference format dependency:** the model loaded here must have been trained on **MediaPipe Pose** data (33 keypoints × 3D = 99 features, `SEQUENCE_LENGTH=30`). A model trained on the BoxingVI dataset (AlphaPose COCO-17, 17 kp × 2D = 34 features) cannot be used directly in the game — the feature dimensions differ. Custom recording (`src/data/collect.py`) is required before the game is functional end-to-end.
+> **Train/inference format dependency:** the model loaded here must have been trained on **MediaPipe Pose** data (33 keypoints × 3D = 99 features, `SEQUENCE_LENGTH=30`). A model trained on the BoxingVI dataset (AlphaPose COCO-17) cannot be used directly.
 
-- Initialize MediaPipe Pose + load trained model checkpoints
+- Uses `mp.tasks.vision.PoseLandmarker` with `RunningMode.VIDEO` and wall-clock timestamps
+- Skeleton drawn manually via OpenCV using hardcoded MediaPipe 33-keypoint connections
 - Maintain rolling buffer of last `SEQUENCE_LENGTH` (30) frames of keypoints
 - On each new frame:
-  1. Extract keypoints via MediaPipe (33 kp × 3D)
-  2. Apply body-relative normalization (same pipeline as training: center on hip midpoint, scale by shoulder width)
+  1. Extract keypoints via `PoseLandmarker.detect_for_video()`
+  2. Apply body-relative normalization (same pipeline as training)
   3. Push to rolling buffer
   4. Run punch model + defense model inference (batch=1)
-  5. Apply confidence threshold + temporal smoothing
-- `SEQUENCE_LENGTH` and `FEATURES_PER_FRAME` in `config.py` must match the values used during training
+  5. Apply confidence threshold + temporal smoothing (majority vote, 5 frames)
 - Target: >20 fps, <100ms latency
 - Return: `(punch_class, punch_conf, defense_class, defense_conf)`
 
@@ -174,12 +177,12 @@ boxing-trainer/
 
 ### `app.py` — Main Loop
 - Initialize Pygame window + webcam capture
-- Game states: MENU → TRAINING → ROUND_END → RESULTS
-- Main loop: capture frame → inference → game logic → render → display
+- Game states: MENU -> TRAINING -> ROUND_END -> RESULTS
+- Main loop: capture frame -> inference -> game logic -> render -> display
 - Handle keyboard/mouse input for menu navigation
 
 ### `renderer.py` — Drawing
-- Render webcam feed as background (via OpenCV → Pygame surface)
+- Render webcam feed as background (via OpenCV -> Pygame surface)
 - Overlay skeleton visualization (draw keypoints + connections)
 - HUD elements: score, combo counter, round timer
 - Attack cue display: directional prompts with countdown timer
@@ -195,11 +198,28 @@ boxing-trainer/
 - Format: AlphaPose COCO-17 keypoints (17 kp × 2D = 34 features) -- incompatible with MediaPipe
 - Integration code kept in `src/data/load_boxingvi.py` for reference only
 
-### Custom MediaPipe Data (required for the game) -- COLLECTED
-- Clips recorded using `src/data/collect.py` automated mode
-  - 8 punch classes + 4 defense classes (neutral sampled from non-action segments)
-- Next: extract 33 MediaPipe keypoints × 3D = 99 features, create 25-frame sliding windows
+### Custom MediaPipe Data -- COLLECTED & EXTRACTING
+- 1,215 clips across 12 classes (~100 per class) recorded via `src/data/collect.py`
+- Keypoint extraction currently running: `data/raw/*.mp4` -> `data/processed/*.npy`
+- Output shape per file: `(N_frames, 33, 3)` -- normalized, float32
 - This dataset trains the deployed game models; target: >75% punch, >70% defense accuracy
+
+---
+
+## MediaPipe 0.10+ Notes
+
+The project uses MediaPipe 0.10+ which has a **new Tasks API** that replaces the old `mp.solutions` approach:
+
+| Old (0.9.x) | New (0.10+) |
+|-------------|-------------|
+| `mp.solutions.pose.Pose` | `mp.tasks.vision.PoseLandmarker` |
+| `pose.process(frame)` | `landmarker.detect_for_video(mp_image, timestamp_ms)` |
+| `results.pose_landmarks.landmark` | `result.pose_landmarks[0]` (list of NormalizedLandmark) |
+| `mp.solutions.drawing_utils` | Manual OpenCV drawing |
+
+- Requires model file: `pose_landmarker_full.task` (auto-downloaded to project root)
+- `RunningMode.VIDEO` used for both batch extraction and real-time inference
+- Timestamps must be monotonically increasing integers (milliseconds)
 
 ---
 

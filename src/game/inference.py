@@ -1,5 +1,5 @@
 """
-Real-time inference pipeline: webcam frame → pose → model predictions.
+Real-time inference pipeline: webcam frame -> pose -> model predictions.
 
 Maintains a rolling buffer of keypoints and runs both classifiers
 on each new frame.
@@ -13,12 +13,28 @@ import mediapipe as mp
 import numpy as np
 import torch
 import torch.nn as nn
+from mediapipe.tasks import python as mp_tasks_python
+from mediapipe.tasks.python import vision as mp_tasks_vision
 
 import config
-from src.data.extract import extract_keypoints_from_frame, normalize_keypoints
+from src.data.extract import ensure_model, extract_keypoints_from_result, normalize_keypoints
 from src.data.preprocess import extract_head_features, flatten_window_for_punch
 from src.models.punch_classifier import PunchClassifier
-from src.models.defense_classifier import DefenseClassifier, HEAD_FEATURE_DIM
+from src.models.defense_classifier import DefenseClassifier
+
+
+# Standard MediaPipe 33-keypoint pose connections for skeleton drawing
+_POSE_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 7),        # face left
+    (0, 4), (4, 5), (5, 6), (6, 8),        # face right
+    (9, 10),                                 # mouth
+    (11, 12),                                # shoulders
+    (11, 13), (13, 15), (15, 17), (15, 19), (15, 21), (17, 19),  # left arm
+    (12, 14), (14, 16), (16, 18), (16, 20), (16, 22), (18, 20),  # right arm
+    (11, 23), (12, 24), (23, 24),           # torso
+    (23, 25), (25, 27), (27, 29), (27, 31), (29, 31),  # left leg
+    (24, 26), (26, 28), (28, 30), (28, 32), (30, 32),  # right leg
+]
 
 
 class RealtimeInference:
@@ -36,15 +52,15 @@ class RealtimeInference:
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
 
-        # MediaPipe Pose
-        self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+        # MediaPipe Pose (Tasks API, 0.10+)
+        model_path = ensure_model()
+        base_options = mp_tasks_python.BaseOptions(model_asset_path=str(model_path))
+        options = mp_tasks_vision.PoseLandmarkerOptions(
+            base_options=base_options,
+            running_mode=mp_tasks_vision.RunningMode.VIDEO,
         )
-        self.mp_drawing = mp.solutions.drawing_utils
+        self.landmarker = mp_tasks_vision.PoseLandmarker.create_from_options(options)
+        self._start_time = time.perf_counter()
 
         # Rolling buffer of raw keypoints (before normalization)
         self.keypoint_buffer = deque(maxlen=config.SEQUENCE_LENGTH)
@@ -92,7 +108,7 @@ class RealtimeInference:
                 - 'punch_confidence': float
                 - 'defense_class': str or None
                 - 'defense_confidence': float
-                - 'pose_landmarks': MediaPipe landmarks (for drawing)
+                - 'pose_landmarks': list of NormalizedLandmark or None (for drawing)
                 - 'inference_ms': inference time in milliseconds
         """
         t0 = time.perf_counter()
@@ -109,11 +125,16 @@ class RealtimeInference:
 
         # Run MediaPipe
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pose_results = self.pose.process(rgb)
-        result["pose_landmarks"] = pose_results.pose_landmarks
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int((time.perf_counter() - self._start_time) * 1000)
+        pose_result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
+
+        # Store raw landmarks for drawing (first person only)
+        if pose_result.pose_landmarks:
+            result["pose_landmarks"] = pose_result.pose_landmarks[0]
 
         # Extract keypoints
-        kp = extract_keypoints_from_frame(pose_results)
+        kp = extract_keypoints_from_result(pose_result)
         if kp is None:
             if self.keypoint_buffer:
                 kp = self.keypoint_buffer[-1].copy()
@@ -153,7 +174,7 @@ class RealtimeInference:
 
         # Defense classification
         if self.defense_model is not None:
-            head_features = extract_head_features(normalized)  # (30, 66)
+            head_features = extract_head_features(normalized)  # (30, head_feat_dim)
             defense_tensor = torch.tensor(head_features, dtype=torch.float32).unsqueeze(0).to(self.device)
 
             with torch.no_grad():
@@ -185,31 +206,39 @@ class RealtimeInference:
         if not history:
             return (0, 0.0)
 
-        # Count votes
         votes: dict[int, list[float]] = {}
         for cls, conf in history:
             votes.setdefault(cls, []).append(conf)
 
-        # Most common class
         best_cls = max(votes, key=lambda c: len(votes[c]))
         avg_conf = np.mean(votes[best_cls])
 
         return (best_cls, float(avg_conf))
 
     def draw_skeleton(self, frame: np.ndarray, landmarks) -> np.ndarray:
-        """Draw MediaPipe pose skeleton on frame."""
+        """Draw pose skeleton on frame using OpenCV."""
         if landmarks is None:
             return frame
 
         annotated = frame.copy()
-        self.mp_drawing.draw_landmarks(
-            annotated, landmarks,
-            self.mp_pose.POSE_CONNECTIONS,
-            self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-            self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2),
-        )
+        h, w = frame.shape[:2]
+
+        # Draw connections
+        for start_idx, end_idx in _POSE_CONNECTIONS:
+            if start_idx < len(landmarks) and end_idx < len(landmarks):
+                s = landmarks[start_idx]
+                e = landmarks[end_idx]
+                cv2.line(annotated,
+                         (int(s.x * w), int(s.y * h)),
+                         (int(e.x * w), int(e.y * h)),
+                         (0, 0, 255), 2)
+
+        # Draw keypoints
+        for lm in landmarks:
+            cv2.circle(annotated, (int(lm.x * w), int(lm.y * h)), 3, (0, 255, 0), -1)
+
         return annotated
 
     def cleanup(self):
         """Release MediaPipe resources."""
-        self.pose.close()
+        self.landmarker.close()

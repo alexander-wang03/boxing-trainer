@@ -60,14 +60,14 @@ COCO_FEATURES_PER_FRAME_WITH_VEL = COCO_FEATURES_PER_FRAME * 2    # 68 (pos + ve
 
 # Active keypoint config — set based on which dataset is being used.
 # Change these when switching between BoxingVI (COCO) and custom (MediaPipe).
-NUM_KEYPOINTS = COCO_NUM_KEYPOINTS
-KEYPOINT_DIMS = COCO_KEYPOINT_DIMS
-FEATURES_PER_FRAME = COCO_FEATURES_PER_FRAME  # 34 (positions only)
+NUM_KEYPOINTS = MEDIAPIPE_NUM_KEYPOINTS
+KEYPOINT_DIMS = MEDIAPIPE_KEYPOINT_DIMS
+FEATURES_PER_FRAME = MEDIAPIPE_FEATURES_PER_FRAME  # 99 (positions only)
 
 # Head keypoint indices
 HEAD_KEYPOINT_INDICES_MEDIAPIPE = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # nose, eyes, ears, mouth
 HEAD_KEYPOINT_INDICES_COCO = [0, 1, 2, 3, 4]  # nose, left eye, right eye, left ear, right ear
-HEAD_KEYPOINT_INDICES = HEAD_KEYPOINT_INDICES_COCO
+HEAD_KEYPOINT_INDICES = HEAD_KEYPOINT_INDICES_MEDIAPIPE
 
 # ──────────────────────────────────────────────
 # BoxingVI Dataset
@@ -78,7 +78,7 @@ BOXINGVI_SEQUENCE_LENGTH = 25  # BoxingVI clips are 25 frames (zero-padded)
 # ──────────────────────────────────────────────
 # Sequence / Windowing
 # ──────────────────────────────────────────────
-SEQUENCE_LENGTH = 25  # frames (matches BoxingVI; change to 30 for custom 30fps data)
+SEQUENCE_LENGTH = 30  # frames (1 second at 30fps, for custom MediaPipe data)
 FRAME_RATE = 30
 
 # ──────────────────────────────────────────────
