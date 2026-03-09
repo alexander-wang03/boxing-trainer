@@ -197,6 +197,115 @@ def get_flipped_label(label: str) -> str:
     return label
 
 
+def build_dataset_from_processed(processed_dir: Path = config.PROCESSED_DIR,
+                                  output_dir: Path = config.SPLITS_DIR,
+                                  augment: bool = True):
+    """
+    Build train/val/test splits directly from processed .npy files.
+
+    Labels are inferred from filenames: the prefix before the first date
+    segment (e.g. 'jab_left_20260307_...' -> 'jab_left').
+
+    Saves:
+        - punch_train.npz, punch_val.npz, punch_test.npz
+        - defense_train.npz, defense_val.npz, defense_test.npz
+    """
+    import re
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    npy_files = sorted(processed_dir.glob("*.npy"))
+    if not npy_files:
+        print(f"Error: No .npy files found in {processed_dir}")
+        return
+
+    print(f"Found {len(npy_files)} processed files in {processed_dir}")
+
+    # Infer label: strip trailing _YYYYMMDD_HHMMSS_microseconds
+    _date_pattern = re.compile(r"_\d{8}_\d{6}_\d+$")
+
+    punch_sequences, punch_labels = [], []
+    defense_sequences, defense_labels = [], []
+    skipped = 0
+
+    for npy_path in npy_files:
+        action = _date_pattern.sub("", npy_path.stem)
+
+        is_punch = action in config.PUNCH_CLASSES
+        is_defense = action in config.DEFENSE_CLASSES
+        if not is_punch and not is_defense:
+            print(f"  Warning: Cannot infer class from '{npy_path.name}', skipping.")
+            skipped += 1
+            continue
+
+        keypoints = np.load(npy_path)  # (N_frames, 33, 3)
+        windows = create_windows(keypoints)
+
+        for window in windows:
+            if is_punch:
+                punch_sequences.append(flatten_window_for_punch(window))
+                punch_labels.append(config.PUNCH_CLASSES.index(action))
+
+                if augment:
+                    flipped = augment_horizontal_flip(window)
+                    flipped_label = get_flipped_label(action)
+                    if flipped_label in config.PUNCH_CLASSES:
+                        punch_sequences.append(flatten_window_for_punch(flipped))
+                        punch_labels.append(config.PUNCH_CLASSES.index(flipped_label))
+
+                    speed_aug = augment_speed_variation(window)
+                    punch_sequences.append(flatten_window_for_punch(speed_aug))
+                    punch_labels.append(config.PUNCH_CLASSES.index(action))
+
+                    dropped = augment_frame_drop(window)
+                    punch_sequences.append(flatten_window_for_punch(dropped))
+                    punch_labels.append(config.PUNCH_CLASSES.index(action))
+
+            elif is_defense:
+                defense_sequences.append(extract_head_features(window))
+                defense_labels.append(config.DEFENSE_CLASSES.index(action))
+
+                if augment:
+                    speed_aug = augment_speed_variation(window)
+                    defense_sequences.append(extract_head_features(speed_aug))
+                    defense_labels.append(config.DEFENSE_CLASSES.index(action))
+
+                    dropped = augment_frame_drop(window)
+                    defense_sequences.append(extract_head_features(dropped))
+                    defense_labels.append(config.DEFENSE_CLASSES.index(action))
+
+    if skipped:
+        print(f"Skipped {skipped} files with unrecognized class names.")
+
+    _save_splits(punch_sequences, punch_labels, "punch", output_dir)
+    _save_splits(defense_sequences, defense_labels, "defense", output_dir)
+    print(f"\nSplits saved to {output_dir}")
+
+
+def _save_splits(sequences: list, labels: list, name: str, output_dir: Path):
+    if not sequences:
+        print(f"  No {name} data found, skipping split.")
+        return
+
+    X = np.array(sequences)
+    y = np.array(labels)
+    print(f"\n{name.upper()} dataset: {X.shape[0]} samples, shape {X.shape[1:]}")
+
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=(config.VAL_RATIO + config.TEST_RATIO),
+        stratify=y, random_state=42
+    )
+    relative_test = config.TEST_RATIO / (config.VAL_RATIO + config.TEST_RATIO)
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=relative_test,
+        stratify=y_temp, random_state=42
+    )
+
+    print(f"  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
+    np.savez(output_dir / f"{name}_train.npz", X=X_train, y=y_train)
+    np.savez(output_dir / f"{name}_val.npz", X=X_val, y=y_val)
+    np.savez(output_dir / f"{name}_test.npz", X=X_test, y=y_test)
+
+
 def build_dataset(annotations_csv: Path = config.ANNOTATIONS_DIR / "annotations.csv",
                   processed_dir: Path = config.PROCESSED_DIR,
                   output_dir: Path = config.SPLITS_DIR,
@@ -290,46 +399,22 @@ def build_dataset(annotations_csv: Path = config.ANNOTATIONS_DIR / "annotations.
                     defense_sequences.append(extract_head_features(dropped))
                     defense_labels.append(config.DEFENSE_CLASSES.index(action))
 
-    # Convert to arrays and split
-    for name, sequences, labels in [
-        ("punch", punch_sequences, punch_labels),
-        ("defense", defense_sequences, defense_labels),
-    ]:
-        if not sequences:
-            print(f"  No {name} data found, skipping split.")
-            continue
-
-        X = np.array(sequences)
-        y = np.array(labels)
-        print(f"\n{name.upper()} dataset: {X.shape[0]} samples, shape {X.shape[1:]}")
-
-        # Stratified split: train / (val+test)
-        X_train, X_temp, y_train, y_temp = train_test_split(
-            X, y, test_size=(config.VAL_RATIO + config.TEST_RATIO),
-            stratify=y, random_state=42
-        )
-        # Split temp into val / test
-        relative_test = config.TEST_RATIO / (config.VAL_RATIO + config.TEST_RATIO)
-        X_val, X_test, y_val, y_test = train_test_split(
-            X_temp, y_temp, test_size=relative_test,
-            stratify=y_temp, random_state=42
-        )
-
-        print(f"  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
-
-        np.savez(output_dir / f"{name}_train.npz", X=X_train, y=y_train)
-        np.savez(output_dir / f"{name}_val.npz", X=X_val, y=y_val)
-        np.savez(output_dir / f"{name}_test.npz", X=X_test, y=y_test)
-
+    _save_splits(punch_sequences, punch_labels, "punch", output_dir)
+    _save_splits(defense_sequences, defense_labels, "defense", output_dir)
     print(f"\nSplits saved to {output_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Preprocess and split dataset.")
     parser.add_argument("--no-augment", action="store_true", help="Disable augmentation")
+    parser.add_argument("--annotations", type=str, default=None,
+                        help="Path to annotations CSV (default: auto-infer labels from filenames)")
     args = parser.parse_args()
 
-    build_dataset(augment=not args.no_augment)
+    if args.annotations:
+        build_dataset(annotations_csv=Path(args.annotations), augment=not args.no_augment)
+    else:
+        build_dataset_from_processed(augment=not args.no_augment)
 
 
 if __name__ == "__main__":

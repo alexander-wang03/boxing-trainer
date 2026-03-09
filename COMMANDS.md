@@ -30,15 +30,10 @@ slip, duck, weave, block
 
 python -m src.data.collect --action duck
 
-# Load Splits
+# Extract MediaPipe Keypoints
 
-python -m src.data.load_boxingvi
+python -m src.data.extract
 
+# Preprocess Data
 
-# Train Punch Classifier:
-
-python -m src.training.train --model punch
-
-# Evaluate:
-
-python -m src.training.evaluate --model punch
+python -m src.data.preprocess
