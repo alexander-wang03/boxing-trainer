@@ -3,9 +3,9 @@
 ## Project Overview
 Webcam-only interactive shadow boxing trainer using pose estimation + dual LSTM classifiers (punch + defense) with a Pygame-based real-time UI.
 
-## Current Status: Custom Data Collection Required
+## Current Status: Data Collected -- Ready for Extraction & Training
 
-Full scaffold complete (17 source files). BoxingVI dataset was integrated but **proved insufficient for punch classification** -- custom data collection is needed for all classes (punches + defense). Automated collection tool with game-style HUD is ready.
+Full scaffold complete (17 source files). BoxingVI dataset was integrated but proved insufficient -- custom data has been collected using the automated collection tool. Ready to run the extraction/preprocessing/training pipeline.
 
 ### Completed Files
 - [x] `config.py` -- global constants, paths, hyperparameters, class labels (COCO-17 keypoint mode)
@@ -60,13 +60,16 @@ python -m src.data.collect --auto --clips 40 --actions jab_left
 - **`config.py`**: Tuned hyperparams (FC_DIM 128->64, LSTM_HIDDEN 256->128, dropout 0.2->0.4, patience 10->20), added `COCO_FEATURES_PER_FRAME_WITH_VEL = 68`
 
 ### Next Steps
-1. **Collect custom data:** `python -m src.data.collect --auto --clips 100`
-2. **Extract keypoints:** `python -m src.data.extract`
-3. **Annotate clips:** `python -m src.data.annotate`
-4. **Preprocess & split:** `python -m src.data.preprocess`
+1. ~~**Collect custom data**~~ -- DONE
+2. **Fix config mismatch:** Switch `config.py` back to MediaPipe mode (33 keypoints, 3D = 99 features) since custom data uses MediaPipe, not COCO-17
+3. **Extract keypoints:** `python -m src.data.extract` (runs MediaPipe on raw .mp4 clips -> .npy)
+4. **Preprocess & split:** `python -m src.data.preprocess` (sliding windows, augmentation, train/val/test .npz)
 5. **Train models:** `python -m src.training.train --model punch` and `--model defense`
 6. **Evaluate:** `python -m src.training.evaluate --compare`
 7. **Run the game:** `python -m src.game.app`
+
+### Known Issue: Config Mismatch
+`config.py` was switched to COCO-17 (17 keypoints, 2D = 34 features) during BoxingVI integration. Custom data uses MediaPipe (33 keypoints, 3D = 99 features). **Must switch back to MediaPipe dimensions before extraction/training.** The `extract.py` script outputs MediaPipe format regardless, so only config constants need updating.
 
 ### Issues & Fixes
 1. **Unicode arrow in print statements (Windows cp1252):** `load_boxingvi.py` used Unicode arrows that failed on Windows console. Fixed by replacing with ASCII `->`.

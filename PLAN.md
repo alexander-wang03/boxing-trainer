@@ -54,15 +54,13 @@ boxing-trainer/
 
 ---
 
-## Phase 1: Data Collection & Recording Tool (`src/data/collect.py`)
+## Phase 1: Data Collection & Recording Tool (`src/data/collect.py`) -- COMPLETE
 
 - OpenCV webcam capture at 30fps (Logitech C920, 1920x1080)
-- Pygame or CV2 preview window showing live feed
-- Keyboard controls: press key to start/stop recording a clip
-- Each clip saved as individual video file in `data/raw/` with metadata (timestamp, action type)
-- Record ~1,200 action clips total:
-  - 800 punches: jab/cross/hook/uppercut × left/right (100 each)
-  - 400 defense: slip/duck/weave/block (100 each)
+- CV2 preview window with game-style HUD (GET READY/GO!/REST/NEXT CLASS phases)
+- Manual mode (keyboard controls) + automated mode (`--auto` flag)
+- Each clip saved as individual video file in `data/raw/` with timestamped filenames
+- **Data collection complete.** Clips recorded for all 12 action classes (8 punches + 4 defense)
 
 ## Phase 2: Annotation & Keypoint Extraction
 
@@ -192,20 +190,16 @@ boxing-trainer/
 
 ## Dataset Strategy
 
-### BoxingVI (pre-existing dataset)
-- Used for **academic comparison only**: train LSTM punch classifier and MLP baseline, report cross-subject test accuracy
-- Format: AlphaPose COCO-17 keypoints (17 kp × 2D = 34 features), clips of 10–25 frames, zero-padded to 25
-- Available: V1–V10 (10 subjects); V1–V7 train, V8–V10 test (cross-subject generalization)
-- 6 punch classes available (neutral class absent; jab_right / cross_left synthesized via flip augmentation)
-- Expected accuracy ceiling ~60–65% due to cross-subject domain shift
-- **Cannot be used to power the real-time game** (different keypoint format than MediaPipe)
+### BoxingVI (pre-existing dataset) -- ABANDONED
+- Was integrated and tested but proved insufficient for punch classification
+- Format: AlphaPose COCO-17 keypoints (17 kp × 2D = 34 features) -- incompatible with MediaPipe
+- Integration code kept in `src/data/load_boxingvi.py` for reference only
 
-### Custom MediaPipe Data (required for the game)
-- Record ~1,200 clips using `src/data/collect.py` with Logitech C920 at 30fps:
-  - 800 punches: jab/cross/hook/uppercut × left/right (100 each)
-  - 400 defense: slip/duck/weave/block (100 each)
-- Extract 33 MediaPipe keypoints × 3D = 99 features, 30-frame windows
-- This dataset is what trains the deployed game models; target: >75% punch, >70% defense accuracy
+### Custom MediaPipe Data (required for the game) -- COLLECTED
+- Clips recorded using `src/data/collect.py` automated mode
+  - 8 punch classes + 4 defense classes (neutral sampled from non-action segments)
+- Next: extract 33 MediaPipe keypoints × 3D = 99 features, create 25-frame sliding windows
+- This dataset trains the deployed game models; target: >75% punch, >70% defense accuracy
 
 ---
 
