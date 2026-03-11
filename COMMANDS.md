@@ -21,7 +21,6 @@ Press ESC at any time to stop early.
 
 jab_left, jab_right, cross_left, cross_right, hook_left, hook_right, uppercut_left, uppercut_right
 
-
 ### Defense
 
 slip, duck, weave, block
@@ -37,3 +36,19 @@ python -m src.data.extract
 # Preprocess Data
 
 python -m src.data.preprocess
+
+# Train Data
+
+python -m src.training.train --model punch
+python -m src.training.train --model defense
+
+# Train Data with baseline MLP
+
+python -m src.training.train --model mlp_punch
+python -m src.training.train --model mlp_defense
+
+# Evaluate
+
+python -m src.training.evaluate --model punch
+python -m src.training.evaluate --model defense
+python -m src.training.evaluate --compare
