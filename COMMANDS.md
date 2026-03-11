@@ -52,3 +52,7 @@ python -m src.training.train --model mlp_defense
 python -m src.training.evaluate --model punch
 python -m src.training.evaluate --model defense
 python -m src.training.evaluate --compare
+
+# Game
+
+python -m src.game.app
