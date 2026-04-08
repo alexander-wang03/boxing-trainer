@@ -156,7 +156,7 @@ class FrameSVM:
         Extract hand-crafted features from a sequence.
 
         Args:
-            sequence: (seq_len, 99) or (seq_len, 33, 3)
+            sequence: (seq_len, 99), (seq_len, 33, 3), or (seq_len, F) pre-computed features
 
         Returns:
             1D feature vector.
@@ -164,36 +164,36 @@ class FrameSVM:
         if len(sequence.shape) == 2 and sequence.shape[1] == 99:
             sequence = sequence.reshape(-1, 33, 3)
 
-        seq_len = len(sequence)
+        if len(sequence.shape) == 3:
+            # Full keypoint format: compute geometric features per frame
+            features = []
+            for frame in sequence:
+                # Left elbow angle
+                v1 = frame[11] - frame[13]  # shoulder to elbow
+                v2 = frame[15] - frame[13]  # wrist to elbow
+                cos_left = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
 
-        # Joint angles (elbow angles)
-        features = []
+                # Right elbow angle
+                v1 = frame[12] - frame[14]
+                v2 = frame[16] - frame[14]
+                cos_right = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
 
-        for frame in sequence:
-            # Left elbow angle
-            v1 = frame[11] - frame[13]  # shoulder to elbow
-            v2 = frame[15] - frame[13]  # wrist to elbow
-            cos_left = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+                # Wrist positions relative to shoulder
+                lw_rel = frame[15] - frame[11]
+                rw_rel = frame[16] - frame[12]
 
-            # Right elbow angle
-            v1 = frame[12] - frame[14]
-            v2 = frame[16] - frame[14]
-            cos_right = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+                # Nose position
+                nose = frame[0]
 
-            # Wrist positions relative to shoulder
-            lw_rel = frame[15] - frame[11]
-            rw_rel = frame[16] - frame[12]
-
-            # Nose position
-            nose = frame[0]
-
-            features.append(np.concatenate([
-                [cos_left, cos_right],
-                lw_rel, rw_rel,
-                nose,
-            ]))
-
-        features = np.array(features)
+                features.append(np.concatenate([
+                    [cos_left, cos_right],
+                    lw_rel, rw_rel,
+                    nose,
+                ]))
+            features = np.array(features)
+        else:
+            # Pre-computed feature format (e.g. defense head keypoints + velocities)
+            features = sequence  # (seq_len, F)
 
         # Aggregate: mean, std, min, max over time
         agg = np.concatenate([
